@@ -1,0 +1,116 @@
+name: Snapshot Delete
+
+on:
+  schedule:
+    - cron: "59 23 * * 5"
+  workflow_dispatch:
+    inputs:
+      includeDEV:
+        description: 'Scan for DEV snapshots?'
+        required: false
+        default: 'true'
+      delete_dev_bool:
+        description: 'Delete DEV snapshots?'
+        required: false
+        default: 'true'
+      retention_dev:
+        description: 'Retention for DEV (days)'
+        required: false
+        default: '60'
+      includeTST:
+        description: 'Scan for TST snapshots?'
+        required: false
+        default: 'true'
+      delete_tst_bool:
+        description: 'Delete TST snapshots?'
+        required: false
+        default: 'true'
+      retention_tst:
+        description: 'Retention for TST (days)'
+        required: false
+        default: '60'
+      includePRD:
+        description: 'Scan for PRD snapshots?'
+        required: false
+        default: 'true'
+      delete_prd_bool:
+        description: 'Delete PRD snapshots?'
+        required: false
+        default: 'true'
+      retention_prd:
+        description: 'Retention for PRD (days)'
+        required: false
+        default: '90'
+
+jobs:
+  delete-snapshots:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT: GOE
+      APP: aem
+      RESOURCE_GROUP: GOE-HUB-AEM-IMG-rg
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set date
+        id: set-date
+        run: echo "DATE=$(date '+%Y-%m-%d')" >> $GITHUB_ENV
+
+      - name: Snapshot operations
+        run: |
+          deleteOld_dev_Snapshots=${{ inputs.delete_dev_bool }}
+          deleteOld_tst_Snapshots=${{ inputs.delete_tst_bool }}
+          deleteOld_prd_Snapshots=${{ inputs.delete_prd_bool }}
+          includeDEV=${{ inputs.includeDEV }}
+          includeTST=${{ inputs.includeTST }}
+          includePRD=${{ inputs.includePRD }}
+          TIMESTAMP_DEV=$(date -d "$DATE -${{ inputs.retention_dev }} days" +"%Y-%m-%d")
+          TIMESTAMP_TST=$(date -d "$DATE -${{ inputs.retention_tst }} days" +"%Y-%m-%d")
+          TIMESTAMP_PRD=$(date -d "$DATE -${{ inputs.retention_prd }} days" +"%Y-%m-%d")
+          
+          az account set --subscription "shared services"
+
+          if [ "$includeDEV" == "true" ]; then
+            echo "Checking DEV snapshots..."
+            oldSnapshots_dev=$(az snapshot list -g $RESOURCE_GROUP --query "[?timeCreated < '$TIMESTAMP_DEV' && contains(name, 'D0')].{id:id}" -o tsv)
+            for id in $oldSnapshots_dev; do
+              if [ "$deleteOld_dev_Snapshots" == "true" ]; then
+                echo "Deleting snapshot with Id: $id"
+                az snapshot delete --ids "$id"
+                echo "Deleted snapshot with Id: $id"
+              else
+                echo "Listing snapshot with Id: $id"
+              fi
+            done
+          fi
+
+          if [ "$includeTST" == "true" ]; then
+            echo "Checking TST snapshots..."
+            oldSnapshots_tst=$(az snapshot list -g $RESOURCE_GROUP --query "[?timeCreated < '$TIMESTAMP_TST' && !contains(name, 'PRD') && !contains(name, 'D0')].{id:id}" -o tsv)
+            for id in $oldSnapshots_tst; do
+              if [ "$deleteOld_tst_Snapshots" == "true" ]; then
+                echo "Deleting snapshot with Id: $id"
+                az snapshot delete --ids "$id"
+                echo "Deleted snapshot with Id: $id"
+              else
+                echo "Listing snapshot with Id: $id"
+              fi
+            done
+          fi
+
+          if [ "$includePRD" == "true" ]; then
+            echo "Checking PRD snapshots..."
+            oldSnapshots_prd=$(az snapshot list -g $RESOURCE_GROUP --query "[?timeCreated < '$TIMESTAMP_PRD' && contains(name, 'PRD')].{id:id}" -o tsv)
+            for id in $oldSnapshots_prd; do
+              if [ "$deleteOld_prd_Snapshots" == "true" ]; then
+                echo "Deleting snapshot with Id: $id"
+                az snapshot delete --ids "$id"
+                echo "Deleted snapshot with Id: $id"
+              else
+                echo "Listing snapshot with Id: $id"
+              fi
+            done
+          fi
