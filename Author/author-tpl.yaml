@@ -1,0 +1,379 @@
+---
+parameters:
+  - name: reImage
+    type: boolean
+  - name: recreateDiskFromExternalSnapshot
+    type: boolean
+  - name: createSnapshotAndRecreateDisk
+    type: boolean
+  - name: takeSnapshot
+    type: boolean
+  - name: environment
+    type: string
+  - name: instance
+    type: string
+  - name: partition
+    type: string
+    default: ci1
+  - name: pipelineImageName
+    type: string
+    default: 'goehubacr.azurecr.io/build/goep-pipelines'
+  - name: pipelineImageTag
+    type: string
+    default: 0-20220201154343-84ca177
+  - name: project
+    type: string
+  - name: providedSnapshotId
+    type: string
+  - name: spoke
+    type: string
+
+jobs:
+  - deployment: "Deploy_${{ parameters.environment }}_${{ parameters.partition }}"
+    displayName: "${{ parameters.partition }}"
+    variables:
+      ${{ if eq(parameters.project, 'goe') }}:
+        projectFull: "goep"
+      ${{ if eq(parameters.spoke, 'prd') }}:
+        agentPoolName: "PRD - Ubuntu"
+      ${{ else }}:
+        agentPoolName: "NPR - Ubuntu"
+      acrName: "goehubacr"
+      acrServiceConnection: "SPN.${{ parameters.project }}.acr.CMN"
+      akvServiceConnection: "SPN.${{ parameters.project }}.aem.akv.${{ parameters.spoke }}"
+      aemServiceConnection: "SPN.${{ parameters.project }}.aem.${{ parameters.spoke }}"
+      kvName: "${{ parameters.project }}-${{ parameters.spoke }}-AEM-kv"
+      rgName: "${{ upper(parameters.project) }}-${{ upper(parameters.spoke) }}-AEM-AUT-${{ upper(parameters.environment) }}-CI-rg"
+      vmName: "vAEMAUT${{ upper(parameters.environment) }}${{ upper(parameters.partition) }}01"
+      dataDiskName: "vAEMAUT${{ upper(parameters.environment) }}${{ upper(parameters.partition) }}01_DATA_DISK"
+      osDiskName: "vAEMAUT${{ upper(parameters.environment) }}${{ upper(parameters.partition) }}01_OS_DISK"
+    pool:
+      name: ${{ variables.agentPoolName }}
+    environment: aem-author-${{ parameters.environment }}
+    continueOnError: false
+    timeoutInMinutes: 0
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - download: build
+              displayName: 'Download build artifacts'
+            - download: config
+              displayName: 'Download config artifacts'
+            - checkout: goep-aem-publisher-platform
+
+            - bash: |
+                if [[ ${{ parameters.createSnapshotAndRecreateDisk }} == True && ${{ parameters.reImage }} == True && ${{ parameters.recreateDiskFromExternalSnapshot }} == True ]]; then
+                  echo "You can't select createSnapshotAndRecreateDisk, reImage and recreateDiskFromExternalSnapshot at the same time."
+                  exit 1
+                elif [[ ${{ parameters.createSnapshotAndRecreateDisk }} == True && ${{ parameters.reImage }} == True ]]; then
+                  echo "You can't select createSnapshotAndRecreateDisk and reImage at the same time."
+                  exit 1
+                elif [[ ${{ parameters.recreateDiskFromExternalSnapshot }} == True && ${{ parameters.takeSnapshot }} == True ]]; then
+                  echo "You can't select recreateDiskFromExternalSnapshot and takeSnapshot at the same time."
+                  exit 1
+                elif [[ ${{ parameters.createSnapshotAndRecreateDisk }} == True && ${{ parameters.takeSnapshot }} == True ]]; then
+                  echo "You can't select createSnapshotAndRecreateDisk and takeSnapshot at the same time."
+                  exit 1
+                elif [[ ${{ parameters.createSnapshotAndRecreateDisk }} == True && ${{ parameters.recreateDiskFromExternalSnapshot }} == True ]]; then
+                  echo "You can't select createSnapshotAndRecreateDisk and recreateDiskFromExternalSnapshot at the same time."
+                  exit 1
+                elif [[ ${{ parameters.reImage }} == True && ${{ parameters.recreateDiskFromExternalSnapshot }} == True ]]; then
+                  echo "You can't select reImage and recreateDiskFromExternalSnapshot at the same time."
+                  exit 1
+                elif [[ ${{ parameters.createSnapshotAndRecreateDisk }} == True || ${{ parameters.reImage }} == True || ${{ parameters.recreateDiskFromExternalSnapshot }} == True || ${{ parameters.takeSnapshot }} == True ]]; then
+                  echo "Validation ok"
+                else
+                  echo "You must select an option between createSnapshotAndRecreateDisk, reImage, takeSnapshot and recreateDiskFromExternalSnapshot"
+                  exit 1
+                fi
+              displayName: 'Check pipeline settings'
+
+            - ${{ if eq(parameters.recreateDiskFromExternalSnapshot, 'true') }}:
+                - task: AzureCLI@2
+                  displayName: 'Check provided snapshot id'
+                  inputs:
+                    azureSubscription: ${{ variables.aemServiceConnection }}
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      function setvar() {
+                          set +x
+                          echo "Set: ${1} = \"${2}\""
+                          echo "##vso[task.setvariable variable=${1}]${2}"
+                          set -x
+                      }
+                      set -x
+                      env
+
+                      IS_SNAPSHOT_ID_VALID=`az snapshot show --ids ${{ parameters.providedSnapshotId }}`
+                      if [[ ! -z "${IS_SNAPSHOT_ID_VALID}" ]]; then
+                        echo "The snapshot is valid"
+                      else
+                        echo "The snapshot is not valid"
+                        exit 1
+                      fi
+
+            - ${{ if or(eq(parameters.createSnapshotAndRecreateDisk, 'true'), eq(parameters.takeSnapshot, 'true'), eq(parameters.reImage, 'true')) }}:
+                - task: AzureCLI@2
+                  displayName: 'Get Author IP'
+                  inputs:
+                    azureSubscription: ${{ variables.aemServiceConnection }}
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      nic_id=`az vm show -n ${{ variables.vmName }} -g ${{ variables.rgName }} | jq -r ".networkProfile.networkInterfaces[0].id"`
+                      vm_ips+=`az network nic show --id $nic_id | jq -r '.ipConfigurations[0].privateIPAddress'`
+
+                      echo $vm_ips
+                      echo "##vso[task.setvariable variable=aemIp]$vm_ips"
+
+                - task: ms-vscs-rm.vss-services-ansible.ansible-task.Ansible@0
+                  displayName: 'Stop AEM'
+                  inputs:
+                    ansibleInterface: remoteMachine
+                    connectionOverSsh: 'ssh-cINFANSPRDCI'
+                    playbookRootRemoteMachine: '$(SYSTEM.DEFAULTWORKINGDIRECTORY)/pkg-assets'
+                    playbookPathLinkedArtifactOnRemoteMachine: stop.yml
+                    inventoriesRemoteMachine: hostList
+                    inventoryHostListRemoteMachine: '$(aemIp)'
+
+            - ${{ if or(eq(parameters.createSnapshotAndRecreateDisk, 'true'), eq(parameters.takeSnapshot, 'true')) }}:
+                - task: AzureCLI@2
+                  displayName: 'Create snapshot'
+                  inputs:
+                    azureSubscription: ${{ variables.aemServiceConnection }}
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      function setvar() {
+                          set +x
+                          echo "Set: ${1} = \"${2}\""
+                          echo "##vso[task.setvariable variable=${1}]${2}"
+                          set -x
+                      }
+                      set -x
+                      env
+
+                      DISK_ID=`az disk show -g ${{ variables.rgName }} -n ${{ variables.dataDiskName }} | jq -r '.id'`
+                      SNAPSHOT_NAME=${{ variables.dataDiskName }}_$(date "+%Y%m%d%H%M%S")
+
+                      az account set --subscription "Shared Services"
+                      az snapshot create -g GOE-HUB-AEM-IMG-rg -n $SNAPSHOT_NAME --source $DISK_ID --network-access-policy DenyAll
+                      SNAPSHOT_ID=`az snapshot show -g GOE-HUB-AEM-IMG-rg -n $SNAPSHOT_NAME | jq -r '.id'`
+
+                      echo "Snapshot $SNAPSHOT_NAME created under GOE-HUB-AEM-IMG-rg"
+                      echo "Snapshot Id: $SNAPSHOT_ID"
+
+                      setvar DISK_ID "${DISK_ID}"
+                      setvar SNAPSHOT_NAME "${SNAPSHOT_NAME}"
+                      setvar SNAPSHOT_ID "${SNAPSHOT_ID}"
+
+                - task: ms-vscs-rm.vss-services-ansible.ansible-task.Ansible@0
+                  displayName: 'Start AEM'
+                  condition: ${{ eq(parameters.takeSnapshot, true) }}
+                  inputs:
+                    ansibleInterface: remoteMachine
+                    connectionOverSsh: 'ssh-cINFANSPRDCI'
+                    playbookRootRemoteMachine: '$(SYSTEM.DEFAULTWORKINGDIRECTORY)/pkg-assets'
+                    playbookPathLinkedArtifactOnRemoteMachine: start.yml
+                    inventoriesRemoteMachine: hostList
+                    inventoryHostListRemoteMachine: '$(aemIp)'
+
+            - ${{ if or(eq(parameters.createSnapshotAndRecreateDisk, 'true'), eq(parameters.reImage, 'true'), eq(parameters.recreateDiskFromExternalSnapshot, 'true')) }}:
+                - template: /_templates/shared/acr-login.yaml
+                  parameters:
+                    acrServiceConnection: ${{ variables.acrServiceConnection }}
+                    acrName: ${{ variables.acrName }}
+
+                - script: sudo chmod 666 /var/run/docker.sock
+                  displayName: 'Grant docker permissions'
+
+                - bash: |
+                      cp -rp $(PIPELINE.WORKSPACE)/config $(SYSTEM.DEFAULTWORKINGDIRECTORY)/
+                      cp -rp $(PIPELINE.WORKSPACE)/build $(SYSTEM.DEFAULTWORKINGDIRECTORY)/
+                  displayName: 'Copy Artifacts'
+
+                - template: /_templates/shared/run-image.yaml
+                  parameters:
+                    imageName: ${{ parameters.pipelineImageName}}
+                    imageTag: ${{ parameters.pipelineImageTag}}
+                    command: repo_templating.sh ${{ variables.projectFull }} ${{ parameters.environment }} ${{ parameters.partition }} $(SYSTEM.DEFAULTWORKINGDIRECTORY)/config/author-template
+                    Name: 'Process templates using confd'
+
+                - bash: |
+                    function setvar() {
+                        local is_secret=$3
+                        set +x
+                        if [[ "$is_secret" == "true" ]]; then
+                            echo "Set: ${1} = [VALUE HIDDEN]"
+                            echo "##vso[task.setvariable variable=${1};issecret=true]${2}"
+                        else
+                            echo "Set: ${1} = \"${2}\""
+                            echo "##vso[task.setvariable variable=${1}]${2}"
+                        fi
+                    }
+                    set +x
+                    env
+
+                    setvar CUSTOM_DATA_BASE64 "`base64 $(SYSTEM.DEFAULTWORKINGDIRECTORY)/config/author-template/target/templates/config-aut.yaml | tr -d '\n'`" true
+                    setvar ADMIN_PASSWORD `head /dev/urandom | tr -dc A-Za-z0-9* | head -c 13`*Ab0 true
+                    setvar IMAGEID `cat $(SYSTEM.DEFAULTWORKINGDIRECTORY)/build/image_sig/image.json | jq -r '.imageId'`
+                    if [[ ${{ parameters.spoke }} == prd ]]; then
+                      setvar DTSERVER "https://lkn619.dynatrace-managed.com/e/58096d71-709f-4335-a959-44a125e69dd3/api"
+                      setvar TENANTID "58096d71-709f-4335-a959-44a125e69dd3"
+                    else
+                      setvar DTSERVER "https://yew310.dynatrace-managed.com/e/3d777993-dc27-4961-b9b1-d7955032039c/api"
+                      setvar TENANTID "3d777993-dc27-4961-b9b1-d7955032039c"
+                    fi
+                  displayName: 'Set variables'
+
+                - task: AzureCLI@2
+                  displayName: 'Get secrets'
+                  inputs:
+                    azureSubscription: ${{ variables.akvServiceConnection }}
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      function setvar() {
+                          set +x
+                          echo "Set: ${1} = [VALUE HIDDEN]"
+                          echo "##vso[task.setvariable variable=${1};issecret=true]${2}"
+                      }
+                      set +x
+                      env
+
+                      setvar STORAGE_KEY `az keyvault secret show --vault-name ${{ variables.kvName }} --name "${{ parameters.environment }}-${{ parameters.partition }}-storagekey" | jq -r '.value'`
+                      setvar DYNATRACE_TOKEN `az keyvault secret show --vault-name ${{ variables.kvName }} --name "dynatrace-token" | jq -r '.value'`
+
+                - task: AzureCLI@2
+                  displayName: 'Delete existing resources'
+                  inputs:
+                    azureSubscription: ${{ variables.aemServiceConnection }}
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -x
+                      env
+
+                      vm_details=`az vm show -g ${{ variables.rgName }} -n ${{ variables.vmName }}`
+                      dataDisk_details=`az disk show -g ${{ variables.rgName }} -n ${{ variables.dataDiskName }}`
+                      osDisk_details=`az disk show -g ${{ variables.rgName }} -n ${{ variables.osDiskName }}`
+                      # new variable for ama
+                      AMA_DISK_NAME=`az vm show -g ${{ variables.rgName }} -n ${{ variables.vmName }} | jq -r ".storageProfile.dataDisks[] | select(.name==\"${{ variables.vmName }}_AMA_DISK\") | .name"`
+                      echo "Value of AMA_DISK_NAME: ${AMA_DISK_NAME}"
+
+                      if [[ ${{ parameters.recreateDiskFromExternalSnapshot }} == True || ${{ parameters.createSnapshotAndRecreateDisk }} == True  ]]; then
+                        echo "Removing vm, dataDisk and osDisk..."
+                        if [[ ! -z "$vm_details" ]]; then
+                          az vm delete -g ${{ variables.rgName }} -n ${{ variables.vmName }} --yes
+                          echo "VM Deleted"
+                        else
+                          echo "VM Not present, skipping"
+                        fi
+                        if [[ ! -z "$dataDisk_details" ]]; then
+                          az disk delete -g ${{ variables.rgName }} -n ${{ variables.dataDiskName }} --yes
+                          echo "DataDisk Deleted"
+                        else
+                          echo "DataDisk Not present, skipping"
+                        fi
+                        if [[ ! -z "$osDisk_details" ]]; then
+                          az disk delete -g ${{ variables.rgName }} -n ${{ variables.osDiskName }} --yes
+                          echo "OS Disk Deleted"
+                        else
+                          echo "OS Disk Not present, skipping"
+                        fi
+                        # added condition for checking if ama disk is present
+                        if [[ ! -z "${AMA_DISK_NAME}" ]]; then
+                          echo "Value of AMA Disk Name found: ${AMA_DISK_NAME}"
+                          az disk delete --name ${AMA_DISK_NAME} --resource-group ${{ variables.rgName }} --yes
+                          echo "AMA disk deleted"
+                        else
+                          echo "AMA disk does not exist, proceeding with the other steps..."
+                        fi
+
+                      elif [[ ${{ parameters.reImage }} == True  ]]; then
+                        echo "Removing vm and osDisk"
+                        if [[ ! -z "$vm_details" ]]; then
+                          az vm delete -g ${{ variables.rgName }} -n ${{ variables.vmName }} --yes
+                          echo "VM Deleted"
+                        else
+                          echo "VM Not present, skipping"
+                        fi
+                        if [[ ! -z "$osDisk_details" ]]; then
+                          az disk delete -g ${{ variables.rgName }} -n ${{ variables.osDiskName }} --yes
+                          echo "OS Disk Deleted"
+                        else
+                          echo "OS Disk Not present, skipping"
+                        fi
+                        # added condition for checking if ama disk is present
+                        if [[ ! -z "${AMA_DISK_NAME}" ]]; then
+                          echo "Value of AMA Disk Name found: ${AMA_DISK_NAME}"
+                          az disk delete --name ${AMA_DISK_NAME} --resource-group ${{ variables.rgName }} --yes
+                          echo "AMA disk deleted"
+                        else
+                          echo "AMA disk does not exist, proceeding with the other steps..."
+                        fi
+                      fi
+
+                - ${{ if ne(parameters.reImage, 'true') }}:
+                    - task: AzureCLI@2
+                      displayName: 'Get snapshot ID'
+                      inputs:
+                        azureSubscription: ${{ variables.aemServiceConnection }}
+                        scriptType: bash
+                        scriptLocation: inlineScript
+                        inlineScript: |
+                          function setvar() {
+                              set +x
+                              echo "Set: ${1} = \"${2}\""
+                              echo "##vso[task.setvariable variable=${1}]${2}"
+                              set -x
+                          }
+                          set -x
+                          env
+
+                          if [[ ${{ parameters.createSnapshotAndRecreateDisk }} == True ]]; then
+                            az account set --subscription "Shared Services"
+                            SNAPSHOT_ID=`az snapshot show -g GOE-HUB-AEM-IMG-rg -n $SNAPSHOT_NAME | jq -r '.id'`
+                            setvar SNAPSHOT_ID "${SNAPSHOT_ID}"
+                          elif [[ ${{ parameters.recreateDiskFromExternalSnapshot }} == True ]]; then
+                            SNAPSHOT_ID=${{ parameters.providedSnapshotId }}
+                            setvar SNAPSHOT_ID "${SNAPSHOT_ID}"
+                          fi
+
+                - task: AzureCLI@2
+                  displayName: 'Create Author VM'
+                  inputs:
+                    azureSubscription: ${{ variables.aemServiceConnection }}
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -x
+                      env
+
+                      if [[ ! -z "${SNAPSHOT_ID}" ]]; then
+                        echo "Creating disk"
+                        az disk create -g ${{ variables.rgName }} -n ${{ variables.vmName }}_DATA_DISK --source ${SNAPSHOT_ID} --zone 1 --network-access-policy DenyAll
+                      fi
+
+                      echo "Creating vm and osDisk"
+                      az deployment group create -g ${{ variables.rgName }} --template-file $(SYSTEM.DEFAULTWORKINGDIRECTORY)/config/author-template/templates/author.vm.template.json --parameters @$(SYSTEM.DEFAULTWORKINGDIRECTORY)/config/author-template/target/templates/author.vm.parameters.json --parameters storageAccountKey="$(STORAGE_KEY)" adminPassword="$(ADMIN_PASSWORD)" imageId="${IMAGEID}" customDataBase64="$(CUSTOM_DATA_BASE64)" diskCreateOption="Attach"
+
+                - ${{ if or(eq(parameters.spoke, 'prd'), eq(parameters.spoke, 'tst')) }}:
+                    - task: AzureCLI@2
+                      displayName: 'Install Dynatrace extension'
+                      inputs:
+                        azureSubscription: ${{ variables.aemServiceConnection }}
+                        scriptType: bash
+                        scriptLocation: inlineScript
+                        inlineScript: |
+                          set -x
+                          env
+
+                          sleep 60
+
+                          az vm extension set --vm-name ${{ variables.vmName }} --name oneAgentLinux \
+                              --resource-group ${{ variables.rgName }} \
+                              --version 2.3 --publisher dynatrace.ruxit \
+                              --settings '{"tenantId": "$(TENANTID)", "token": "$(DYNATRACE_TOKEN)", "server": "$(DTSERVER)"}'
