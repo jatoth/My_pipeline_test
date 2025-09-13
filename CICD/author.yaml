@@ -1,0 +1,282 @@
+---
+trigger: none
+
+resources:
+  pipelines:
+    - pipeline: build
+      project: GOEP-System
+      source: goep-aem-platform-sig
+      branch: master
+    - pipeline: config
+      project: GOEP-System
+      source: goep-aem-config
+      branch: master
+  repositories:
+    - repository: goep-aem-publisher-platform
+      type: git
+      name: GOEP-System/goep-aem-publisher-platform
+      ref: refs/heads/master
+
+parameters:
+  - name: reImage
+    type: boolean
+    default: false
+    displayName: Reimage author (only vm and osDisk will be deleted)
+  - name: createSnapshotAndRecreateDisk
+    type: boolean
+    default: false
+    displayName: Create a snapshot and perform a full redeploy (vm, dataDisk and osDisk will be deleted)
+  - name: recreateDiskFromExternalSnapshot
+    type: boolean
+    default: false
+    displayName: Full redeploy from an external snapshot (vm, dataDisk and osDisk will be deleted)
+  - name: takeSnapshot
+    type: boolean
+    default: true
+    displayName: Take snapshot (can be used alone or combined with reImage)
+
+  - name: d01
+    type: boolean
+    default: false
+    displayName: Deploy to D01
+  - name: d02
+    type: boolean
+    default: false
+    displayName: Deploy to D02
+  - name: d03
+    type: boolean
+    default: false
+    displayName: Deploy to D03
+  - name: d04
+    type: boolean
+    default: false
+    displayName: Deploy to D04
+  - name: d05
+    type: boolean
+    default: false
+    displayName: Deploy to D05
+  - name: d06
+    type: boolean
+    default: false
+    displayName: Deploy to D06
+  - name: cd1
+    type: boolean
+    default: false
+    displayName: Deploy to CD1
+  - name: syt
+    type: boolean
+    default: false
+    displayName: Deploy to SYT
+  - name: int
+    type: boolean
+    default: false
+    displayName: Deploy to INT
+  - name: ams
+    type: boolean
+    default: false
+    displayName: Deploy to AMS
+  - name: prd
+    type: boolean
+    default: false
+    displayName: Deploy to PRD
+
+stages:
+  - stage: pre_deploy
+    displayName: Pre deploy
+    dependsOn: []
+    jobs:
+      - job: calculateTag
+        displayName: Calculate tag
+        steps:
+          - script: |
+                runName="$(resources.pipeline.build.runName)"
+                IMAGEVERSION=`rev <<< $runName | cut -d "-" -f2- | rev`
+                echo "##vso[build.updatebuildnumber]${IMAGEVERSION}"
+            displayName: Calculate and set image tag
+
+  - ${{ if eq(parameters.d01, true) }}:
+      - stage: D01
+        displayName: Deploy to D01
+        dependsOn: [pre_deploy]
+        jobs:
+          - template: /_templates/vms/goep-aem-author-vm.yaml
+            parameters:
+              createSnapshotAndRecreateDisk: ${{ parameters.createSnapshotAndRecreateDisk }}
+              environment: d01
+              instance: ci
+              reImage: ${{ parameters.reImage }}
+              project: goe
+              providedSnapshotId: $(D01_SNAPSHOT_ID)
+              recreateDiskFromExternalSnapshot: ${{ parameters.recreateDiskFromExternalSnapshot }}
+              spoke: dev
+              takeSnapshot: ${{ parameters.takeSnapshot }}
+
+  - ${{ if eq(parameters.d02, true) }}:
+      - stage: D02
+        displayName: Deploy to D02
+        dependsOn: [pre_deploy]
+        jobs:
+          - template: /_templates/vms/goep-aem-author-vm.yaml
+            parameters:
+              createSnapshotAndRecreateDisk: ${{ parameters.createSnapshotAndRecreateDisk }}
+              environment: d02
+              instance: ci
+              reImage: ${{ parameters.reImage }}
+              project: goe
+              providedSnapshotId: $(D02_SNAPSHOT_ID)
+              recreateDiskFromExternalSnapshot: ${{ parameters.recreateDiskFromExternalSnapshot }}
+              spoke: dev
+              takeSnapshot: ${{ parameters.takeSnapshot }}
+
+  - ${{ if eq(parameters.d03, true) }}:
+      - stage: D03
+        displayName: Deploy to D03
+        dependsOn: [pre_deploy]
+        jobs:
+          - template: /_templates/vms/goep-aem-author-vm.yaml
+            parameters:
+              createSnapshotAndRecreateDisk: ${{ parameters.createSnapshotAndRecreateDisk }}
+              environment: d03
+              instance: ci
+              reImage: ${{ parameters.reImage }}
+              project: goe
+              providedSnapshotId: $(D03_SNAPSHOT_ID)
+              recreateDiskFromExternalSnapshot: ${{ parameters.recreateDiskFromExternalSnapshot }}
+              spoke: dev
+              takeSnapshot: ${{ parameters.takeSnapshot }}
+
+  - ${{ if eq(parameters.d04, true) }}:
+      - stage: D04
+        displayName: Deploy to D04
+        dependsOn: [pre_deploy]
+        jobs:
+          - template: /_templates/vms/goep-aem-author-vm.yaml
+            parameters:
+              createSnapshotAndRecreateDisk: ${{ parameters.createSnapshotAndRecreateDisk }}
+              environment: d04
+              instance: ci
+              reImage: ${{ parameters.reImage }}
+              project: goe
+              providedSnapshotId: $(D04_SNAPSHOT_ID)
+              recreateDiskFromExternalSnapshot: ${{ parameters.recreateDiskFromExternalSnapshot }}
+              spoke: dev
+              takeSnapshot: ${{ parameters.takeSnapshot }}
+
+  - ${{ if eq(parameters.d05, true) }}:
+      - stage: D05
+        displayName: Deploy to D05
+        dependsOn: [pre_deploy]
+        jobs:
+          - template: /_templates/vms/goep-aem-author-vm.yaml
+            parameters:
+              createSnapshotAndRecreateDisk: ${{ parameters.createSnapshotAndRecreateDisk }}
+              environment: d05
+              instance: ci
+              reImage: ${{ parameters.reImage }}
+              project: goe
+              providedSnapshotId: $(D05_SNAPSHOT_ID)
+              recreateDiskFromExternalSnapshot: ${{ parameters.recreateDiskFromExternalSnapshot }}
+              spoke: dev
+              takeSnapshot: ${{ parameters.takeSnapshot }}
+
+  - ${{ if eq(parameters.d06, true) }}:
+      - stage: D06
+        displayName: Deploy to D06
+        dependsOn: [pre_deploy]
+        jobs:
+          - template: /_templates/vms/goep-aem-author-vm.yaml
+            parameters:
+              createSnapshotAndRecreateDisk: ${{ parameters.createSnapshotAndRecreateDisk }}
+              environment: d06
+              instance: ci
+              reImage: ${{ parameters.reImage }}
+              project: goe
+              providedSnapshotId: $(D06_SNAPSHOT_ID)
+              recreateDiskFromExternalSnapshot: ${{ parameters.recreateDiskFromExternalSnapshot }}
+              spoke: dev
+              takeSnapshot: ${{ parameters.takeSnapshot }}
+
+  - ${{ if eq(parameters.cd1, true) }}:
+      - stage: CD1
+        displayName: Deploy to CD1
+        dependsOn: [pre_deploy]
+        jobs:
+          - template: /_templates/vms/goep-aem-author-vm.yaml
+            parameters:
+              createSnapshotAndRecreateDisk: ${{ parameters.createSnapshotAndRecreateDisk }}
+              environment: cd1
+              instance: ci
+              reImage: ${{ parameters.reImage }}
+              project: goe
+              providedSnapshotId: $(CD1_SNAPSHOT_ID)
+              recreateDiskFromExternalSnapshot: ${{ parameters.recreateDiskFromExternalSnapshot }}
+              spoke: dev
+              takeSnapshot: ${{ parameters.takeSnapshot }}
+
+  - ${{ if eq(parameters.syt, true) }}:
+      - stage: SYT
+        displayName: Deploy to SYT
+        dependsOn: [pre_deploy]
+        jobs:
+          - template: /_templates/vms/goep-aem-author-vm.yaml
+            parameters:
+              createSnapshotAndRecreateDisk: ${{ parameters.createSnapshotAndRecreateDisk }}
+              environment: syt
+              instance: ci
+              reImage: ${{ parameters.reImage }}
+              project: goe
+              providedSnapshotId: $(SYT_SNAPSHOT_ID)
+              recreateDiskFromExternalSnapshot: ${{ parameters.recreateDiskFromExternalSnapshot }}
+              spoke: tst
+              takeSnapshot: ${{ parameters.takeSnapshot }}
+
+  - ${{ if eq(parameters.int, true) }}:
+      - stage: INT
+        displayName: Deploy to INT
+        dependsOn: [pre_deploy]
+        jobs:
+          - template: /_templates/vms/goep-aem-author-vm.yaml
+            parameters:
+              createSnapshotAndRecreateDisk: ${{ parameters.createSnapshotAndRecreateDisk }}
+              environment: int
+              instance: ci
+              reImage: ${{ parameters.reImage }}
+              project: goe
+              providedSnapshotId: $(INT_SNAPSHOT_ID)
+              recreateDiskFromExternalSnapshot: ${{ parameters.recreateDiskFromExternalSnapshot }}
+              spoke: tst
+              takeSnapshot: ${{ parameters.takeSnapshot }}
+
+  - ${{ if eq(parameters.ams, true) }}:
+      - stage: AMS
+        displayName: Deploy to AMS
+        dependsOn: [pre_deploy]
+        jobs:
+          - template: /_templates/vms/goep-aem-author-vm.yaml
+            parameters:
+              createSnapshotAndRecreateDisk: ${{ parameters.createSnapshotAndRecreateDisk }}
+              environment: ams
+              instance: ci
+              reImage: ${{ parameters.reImage }}
+              project: goe
+              providedSnapshotId: $(AMS_SNAPSHOT_ID)
+              recreateDiskFromExternalSnapshot: ${{ parameters.recreateDiskFromExternalSnapshot }}
+              spoke: tst
+              takeSnapshot: ${{ parameters.takeSnapshot }}
+
+  - ${{ if eq(parameters.prd, true) }}:
+      - stage: PRD
+        displayName: Deploy to PRD
+        dependsOn: [pre_deploy]
+        jobs:
+          - template: /_templates/vms/goep-aem-author-vm.yaml
+            parameters:
+              createSnapshotAndRecreateDisk: ${{ parameters.createSnapshotAndRecreateDisk }}
+              environment: prd
+              instance: ci
+              reImage: ${{ parameters.reImage }}
+              project: goe
+              providedSnapshotId: $(PRD_SNAPSHOT_ID)
+              recreateDiskFromExternalSnapshot: ${{ parameters.recreateDiskFromExternalSnapshot }}
+              spoke: prd
+              takeSnapshot: ${{ parameters.takeSnapshot }}
